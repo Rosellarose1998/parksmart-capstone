@@ -1,0 +1,18 @@
+project_id  = "your-gcp-project-id"
+region      = "us-central1"
+environment = "dev"
+app_name    = "parksmart"
+
+# Set after connecting your GitHub repo
+github_repo = "your-org/ParkSmart"
+
+# CORS origins for your frontend
+cors_origins = ["http://localhost:3000", "https://your-frontend-domain.com"]
+
+# Cloud Run scaling
+cloud_run_min_instances = 0
+cloud_run_max_instances = 5
+
+# Cloud SQL sizing
+db_tier      = "db-f1-micro"
+db_disk_size = 10

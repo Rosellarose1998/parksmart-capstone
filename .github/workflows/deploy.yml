@@ -1,0 +1,83 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Deployment environment
+        required: true
+        default: dev
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+
+env:
+  REGION: us-central1
+  APP_NAME: parksmart
+  PYTHON_DOCKER_IMAGE: python:3.12-slim-bookworm
+
+jobs:
+  deploy:
+    name: Deploy to Cloud Run
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: Set deployment variables
+        id: vars
+        run: |
+          ENV="${{ github.event.inputs.environment || 'dev' }}"
+          echo "environment=${ENV}" >> $GITHUB_OUTPUT
+          echo "image=${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.APP_NAME }}-${ENV}-api/api:${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "service=${{ env.APP_NAME }}-${ENV}-api" >> $GITHUB_OUTPUT
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          build-args: |
+            PYTHON_IMAGE=${{ env.PYTHON_DOCKER_IMAGE }}
+          push: true
+          tags: |
+            ${{ steps.vars.outputs.image }}
+            ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.APP_NAME }}-${{ steps.vars.outputs.environment }}-api/api:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run services update ${{ steps.vars.outputs.service }} \
+            --image=${{ steps.vars.outputs.image }} \
+            --region=${{ env.REGION }} \
+            --platform=managed \
+            --quiet
+
+      - name: Verify deployment
+        run: |
+          URL=$(gcloud run services describe ${{ steps.vars.outputs.service }} \
+            --region=${{ env.REGION }} \
+            --format='value(status.url)')
+          echo "Deployed to: ${URL}"
+          curl -sf "${URL}/health" | jq .

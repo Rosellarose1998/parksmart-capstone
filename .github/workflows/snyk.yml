@@ -1,0 +1,159 @@
+name: Snyk Security Scan
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+env:
+  SNYK_SEVERITY_THRESHOLD: high
+  PYTHON_DOCKER_IMAGE: python:3.12-slim-bookworm
+
+jobs:
+  snyk-python:
+    name: Snyk — Python dependencies
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Run Snyk on Python
+        id: snyk-python
+        uses: snyk/actions/python-3.12@master
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          command: test
+          args: >-
+            --file=backend/requirements.txt
+            --project-name=parksmart-backend
+            --severity-threshold=${{ env.SNYK_SEVERITY_THRESHOLD }}
+            --sarif-file-output=snyk-python.sarif
+
+      - name: Upload Python SARIF to GitHub Code Scanning
+        if: always() && steps.snyk-python.outcome != 'skipped'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: snyk-python.sarif
+          category: snyk-python
+
+      - name: Fail if Snyk found vulnerabilities
+        if: steps.snyk-python.outcome == 'failure'
+        run: exit 1
+
+  snyk-docker:
+    name: Snyk — Docker image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image for scanning
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          load: true
+          tags: parksmart-api:snyk-scan
+          build-args: |
+            PYTHON_IMAGE=${{ env.PYTHON_DOCKER_IMAGE }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run Snyk on container image
+        id: snyk-docker
+        uses: snyk/actions/docker@master
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          image: parksmart-api:snyk-scan
+          args: --severity-threshold=${{ env.SNYK_SEVERITY_THRESHOLD }} --sarif-file-output=snyk-docker.sarif
+
+      - name: Upload Docker SARIF to GitHub Code Scanning
+        if: always() && steps.snyk-docker.outcome != 'skipped'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: snyk-docker.sarif
+          category: snyk-docker
+
+      - name: Fail if Snyk found vulnerabilities
+        if: steps.snyk-docker.outcome == 'failure'
+        run: exit 1
+
+  snyk-iac:
+    name: Snyk — Terraform (IaC)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Snyk on Terraform
+        id: snyk-iac
+        uses: snyk/actions/iac@master
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          file: terraform/
+          args: >-
+            --severity-threshold=${{ env.SNYK_SEVERITY_THRESHOLD }}
+            --sarif-file-output=snyk-iac.sarif
+
+      - name: Upload IaC SARIF to GitHub Code Scanning
+        if: always() && steps.snyk-iac.outcome != 'skipped'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: snyk-iac.sarif
+          category: snyk-iac
+
+      - name: Fail if Snyk found vulnerabilities
+        if: steps.snyk-iac.outcome == 'failure'
+        run: exit 1
+
+  snyk-monitor:
+    name: Snyk — Monitor (main only)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Publish snapshot to Snyk
+        uses: snyk/actions/python-3.12@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          command: monitor
+          args: --file=backend/requirements.txt --project-name=parksmart-backend
