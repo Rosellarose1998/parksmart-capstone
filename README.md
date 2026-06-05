@@ -385,4 +385,7 @@ Use a **private repository** unless your project requires otherwise.
 
 ## License
 
-Add your project or course license here.
+This project is licensed under the MIT License.
+
+See the LICENSE file for details.
+
